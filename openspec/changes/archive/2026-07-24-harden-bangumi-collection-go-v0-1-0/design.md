@@ -154,7 +154,7 @@ None. Default QPS/burst, retry bounds, DTO compatibility, dedupe key/order, erro
 
 ## Change Boundary
 
-- **Status**: investigated=yes; specified=approved with exact planning checkpoint commit pending; implemented=no; verified=specification strict validation and independent semantic review complete, no implementation verification; committed=bootstrap governance only, no hardening planning or implementation commit; pushed=no; released=no; deployed=no.
+- **Status**: investigated=yes; specified=approved and committed; implemented=yes; verified=independent code review plus format, module, vet, build, full-test, race, randomized-order, coverage, CI, strict OpenSpec, and boundary gates passed; committed=yes at local `63036ca990eaade8cbf691daf8b1db31ca39ac83`; pushed=no; released=no; deployed=no.
 - **Owner**: delegated External collection client apply subagent; main agent only reviews/amends OpenSpec and performs read-only acceptance.
 - **Writable/Owned paths**
   - Planning: `openspec/changes/harden-bangumi-collection-go-v0-1-0/.openspec.yaml`, `proposal.md`, `design.md`, `specs/collection-client-v0-1-0/spec.md`, and `tasks.md` below that exact active root.

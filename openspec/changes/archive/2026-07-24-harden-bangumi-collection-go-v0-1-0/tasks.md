@@ -58,7 +58,7 @@ These are acceptance-gated actions, not pre-archive checkboxes. After the main a
   - specified: approved and committed as the exact planning checkpoint.
   - implemented: yes; the complete unstaged candidate is accepted.
   - verified: independent review plus main-agent format, module, vet, full-test, race, strict OpenSpec, and boundary acceptance passed.
-  - committed: planning checkpoint only; the accepted implementation/archive commit is pending.
+  - committed: yes — the accepted implementation and archive are local commit `63036ca990eaade8cbf691daf8b1db31ca39ac83`.
   - pushed: no.
   - released: no.
   - deployed: no.

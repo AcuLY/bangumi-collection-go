@@ -40,7 +40,7 @@ None. `external-openspec-bootstrap` remains unchanged and is consumed as the gov
   - specified: yes — the approved five-file planning checkpoint is committed.
   - implemented: yes — the complete unstaged candidate was produced by delegated apply.
   - verified: yes — independent review plus main-agent format, module, vet, full-test, race, strict OpenSpec, and boundary acceptance passed.
-  - committed: planning checkpoint only; the accepted implementation/archive commit is pending.
+  - committed: yes — the accepted implementation and archive are local commit `63036ca990eaade8cbf691daf8b1db31ca39ac83`.
   - pushed: no.
   - released: no.
   - deployed: no.
