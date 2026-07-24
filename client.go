@@ -1,68 +1,160 @@
-// Package collection 提供获取 Bangumi（番组计划）用户收藏列表的 Go 客户端。
+// Package collection provides an anonymous, read-only client for Bangumi
+// public user collections.
 //
-// 本包支持并发获取用户的动画、书籍、游戏、音乐等条目的收藏数据，
-// 包括想看、在看、看过、搁置、抛弃等收藏状态。
+// A Client is safe for concurrent use after construction. Fetch retrieves all
+// pages and returns a canonical order; FetchPage preserves one upstream page's
+// order. Requests never send Authorization or Cookie headers.
 //
-// 基本用法:
+// Bangumi collection records require tags but may omit comment and the nested
+// subject projection. An omitted comment becomes the empty string; an omitted
+// subject keeps ID equal to SubjectID and leaves Name and NameCn empty. Present
+// optional fields must still contain a valid non-null value.
 //
-//	client := collection.NewClient("AcuL/my-private-project")
+// Subject types follow the official mapping: Book 1, Anime 2, Music 3, Game 4,
+// and Real 6. Music and Game intentionally correct the reversed names in the
+// untagged prototype before the first public version.
 //
-//	subjects, err := client.Fetch(
-// 		ctx, 
-// 		"username", 
-// 		collection.SubjectTypeAnime,
-//	    collection.CollectionTypeDone,
-//	    collection.CollectionTypeDoing,
-//	)
+// The first public contract retains NewClient, Fetch, FetchPage, collection
+// enum values, and existing non-authentication options. It intentionally
+// removes WithAccessToken, rejects an empty Fetch collection-type list, extends
+// Subject to the complete collection DTO, and keeps HTTPError.Body empty. New
+// options configure a test endpoint, a shared rate limit, and a maximum retry
+// delay.
 //
-// 支持用选项函数附加 Bangumi 的访问令牌、自定义 HTTP 客户端、并发限制、超时重试等
+// This repository is preparing the first v0.1.0 contract. The package has not
+// been tagged or published by this change.
 package collection
 
 import (
+	"context"
+	"math/rand/v2"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/time/rate"
 )
 
 const (
+	defaultEndpoint         = "https://api.bgm.tv"
 	defaultConcurrencyLimit = 10
 	defaultRequestTimeout   = 30 * time.Second
 	defaultMaxRetries       = 3
 	defaultRetryInterval    = time.Second
+	defaultMaxRetryDelay    = 30 * time.Second
+	defaultRequestsPerSec   = 3
+	defaultRateBurst        = 1
 )
 
-// Client 抓取 Bangumi 收藏列表客户端
+// Client retrieves Bangumi public collection data.
+//
+// Configuration is fixed when NewClient returns. The same Client shares its
+// request-rate and in-flight limits across all Fetch and FetchPage calls.
 type Client struct {
 	httpClient       *http.Client
+	endpoint         *url.URL
 	userAgent        string
-	accessToken      string
 	concurrencyLimit int
 	requestTimeout   time.Duration
 	maxRetries       int
 	retryInterval    time.Duration
+	maxRetryDelay    time.Duration
+	requestsPerSec   float64
+	rateBurst        int
+	configErr        error
+
+	requestLimiter *rate.Limiter
+	inflight       chan struct{}
+
+	// The hooks are immutable in production. Package tests may replace them
+	// before the Client is used to make retry behavior deterministic.
+	now         func() time.Time
+	sleep       func(context.Context, time.Duration) error
+	randomFloat func() float64
 }
 
-// NewClient 创建新的 Bangumi 收藏抓取客户端
+// NewClient creates an anonymous Bangumi public-collection client.
 //
-// userAgent 必填，
-// 参考 https://github.com/bangumi/api/blob/master/docs-raw/user%20agent.md
+// userAgent is required and must be valid UTF-8, contain no control rune, and
+// be between 1 and 256 bytes. Since this constructor preserves its historical
+// signature, invalid configuration is retained on the Client and returned as
+// ErrInvalidConfiguration by every operation before transport.
 func NewClient(userAgent string, options ...Option) *Client {
+	endpoint, _ := parseEndpoint(defaultEndpoint)
 	c := &Client{
+		endpoint:         endpoint,
 		userAgent:        userAgent,
 		concurrencyLimit: defaultConcurrencyLimit,
 		requestTimeout:   defaultRequestTimeout,
 		maxRetries:       defaultMaxRetries,
 		retryInterval:    defaultRetryInterval,
+		maxRetryDelay:    defaultMaxRetryDelay,
+		requestsPerSec:   defaultRequestsPerSec,
+		rateBurst:        defaultRateBurst,
+		now:              time.Now,
+		sleep:            sleepContext,
+		randomFloat:      rand.Float64,
 	}
 
-	for _, opt := range options {
-		opt(c)
+	if !validUserAgent(userAgent) {
+		c.recordConfigurationError()
+	}
+
+	for _, option := range options {
+		if option == nil {
+			c.recordConfigurationError()
+			continue
+		}
+		option(c)
 	}
 
 	if c.httpClient == nil {
-		c.httpClient = &http.Client{
-			Timeout: c.requestTimeout,
-		}
+		c.httpClient = cloneHTTPClient(http.DefaultClient)
 	}
+	c.requestLimiter = rate.NewLimiter(rate.Limit(c.requestsPerSec), c.rateBurst)
+	c.inflight = make(chan struct{}, c.concurrencyLimit)
 
 	return c
+}
+
+func (c *Client) recordConfigurationError() {
+	if c.configErr == nil {
+		c.configErr = ErrInvalidConfiguration
+	}
+}
+
+func validUserAgent(value string) bool {
+	if !utf8.ValidString(value) || len(value) == 0 || len(value) > 256 {
+		return false
+	}
+	if strings.TrimFunc(value, unicode.IsSpace) == "" {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if delay <= 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

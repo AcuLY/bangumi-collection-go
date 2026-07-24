@@ -16,12 +16,22 @@ Apply SHALL begin only from exact `HARDENING_PLANNING_HEAD`, write only the 21 a
 - **THEN** apply SHALL stop before product mutation and report the exact mismatch
 
 ### Requirement: The public DTO preserves the complete collection record
-`Fetch` and `FetchPage` SHALL return `*Subject` values with public fields `ID`, `SubjectID`, `SubjectType`, `Type`, `Name`, `NameCn`, `Rate`, `Comment`, `Tags`, `UpdatedAt`, `VolStatus`, `EpStatus`, and `Private`. `SubjectID` SHALL contain upstream top-level `subject_id`; compatibility field `ID` SHALL equal `SubjectID`. `SubjectType` SHALL contain upstream `subject_type`; `Type` SHALL contain the collection state. Comment, tags, update timestamp, progress, rating, and private marker SHALL be preserved without inference.
+`Fetch` and `FetchPage` SHALL return `*Subject` values with public fields `ID`, `SubjectID`, `SubjectType`, `Type`, `Name`, `NameCn`, `Rate`, `Comment`, `Tags`, `UpdatedAt`, `VolStatus`, `EpStatus`, and `Private`. `SubjectID` SHALL contain upstream top-level `subject_id`; compatibility field `ID` SHALL equal `SubjectID`. `SubjectType` SHALL contain upstream `subject_type`; `Type` SHALL contain the collection state. Present comment, required tags, update timestamp, progress, rating, and private marker SHALL be preserved without semantic inference.
 
-The decoder SHALL require a positive subject ID, valid subject type in `{1,2,3,4,6}`, valid collection type in `{1,2,3,4,5}`, rate in `0..10`, non-negative progress, RFC3339 `updated_at`, consistent top-level/nested subject identity, and exact normalized requested offset/limit metadata. Every page total SHALL be in `0..1_000_000` per collection type and `len(data)` SHALL NOT exceed the normalized requested limit. Any violation SHALL return `*ProtocolError` matching `ErrProtocol` before allocation or scheduling. It SHALL copy all returned tag slices and canonicalize an absent/empty tag set to a non-nil empty slice. Unknown additive upstream JSON fields MAY be ignored; missing/malformed required content, multiple JSON values, or trailing non-whitespace SHALL fail.
+The decoder SHALL follow the current official Bangumi OAS: top-level
+`subject_id`, `subject_type`, `rate`, `type`, `tags`, `ep_status`,
+`vol_status`, `updated_at`, and `private` are required, while `comment` and
+nested `subject` are optional. An absent comment SHALL map to `Comment == ""`.
+An absent nested subject SHALL still set `ID == SubjectID` and leave
+`Name`/`NameCn` empty; when present, its required identity/type/name tuple SHALL
+be complete and consistent with the top level. A missing/null required tags
+array SHALL fail, while an empty required array SHALL become a non-nil empty
+slice and every returned tag slice SHALL be copied.
+
+The decoder SHALL require a positive subject ID, valid subject type in `{1,2,3,4,6}`, valid collection type in `{1,2,3,4,5}`, rate in `0..10`, non-negative progress, RFC3339 `updated_at`, and exact normalized requested offset/limit metadata. Every page total SHALL be in `0..1_000_000` per collection type and `len(data)` SHALL NOT exceed the normalized requested limit. Any violation SHALL return `*ProtocolError` matching `ErrProtocol` before allocation or scheduling. Unknown additive upstream JSON fields MAY be ignored; missing/malformed required content, malformed present optional content, multiple JSON values, or trailing non-whitespace SHALL fail.
 
 #### Scenario: Complete valid collection decodes
-- **WHEN** an `httptest` response contains every required collection field and consistent nested subject identity
+- **WHEN** an `httptest` response contains every required collection field and a consistent optional nested subject
 - **THEN** both page and aggregate operations SHALL return every exact value
 - **AND** `ID` SHALL equal `SubjectID`
 - **AND** mutating a source decode buffer or another result SHALL NOT mutate the returned tags
@@ -30,6 +40,11 @@ The decoder SHALL require a positive subject ID, valid subject type in `{1,2,3,4
 - **WHEN** a success payload omits a required field, uses an invalid enum/range/timestamp, disagrees on subject identity, has invalid page metadata, or contains trailing JSON
 - **THEN** the operation SHALL return a typed non-retryable decode or protocol error
 - **AND** it SHALL return no partial aggregate result
+
+#### Scenario: Optional comment and subject are absent
+- **WHEN** a success payload contains every required top-level field but omits `comment` and nested `subject`
+- **THEN** decoding SHALL succeed with empty `Comment`, `Name`, and `NameCn`
+- **AND** `ID` SHALL still equal the required top-level `SubjectID`
 
 #### Scenario: Empty public collection succeeds
 - **WHEN** the first valid page reports total zero and contains no data
@@ -47,6 +62,11 @@ Input classification SHALL be exact: nil context → `ErrNilContext`; blank trim
 - **THEN** the server SHALL observe one escaped UID path segment, preserved case, expected query parameters, User-Agent, and JSON Accept header
 - **AND** it SHALL observe no Authorization or Cookie header
 
+#### Scenario: Dot-only UID remains opaque
+- **WHEN** the valid normalized UID is `.` or `..`
+- **THEN** its dots SHALL be percent-encoded in the one UID segment
+- **AND** no client, proxy, or router path normalization SHALL change the route
+
 #### Scenario: Custom client contains credentials or redirects
 - **WHEN** `WithHTTPClient` receives a client with a cookie jar or redirect policy
 - **THEN** the package-owned clone SHALL send no jar cookie and SHALL reject the first redirect without following it
@@ -57,15 +77,20 @@ Input classification SHALL be exact: nil context → `ErrNilContext`; blank trim
 - **THEN** the operation SHALL fail before any transport call with the stable matching input/config sentinel
 
 ### Requirement: Existing non-authenticated call shapes have a documented compatibility boundary
-The public signatures of `NewClient(userAgent string, options ...Option) *Client`, `Fetch(context.Context, string, SubjectType, ...CollectionType) ([]*Subject, error)`, and `FetchPage(context.Context, string, SubjectType, CollectionType, int, int) (*PageResult, error)` SHALL remain. Subject-type and collection-type constant numeric values SHALL remain unchanged. `WithHTTPClient(*http.Client) Option`, `WithConcurrencyLimit(int) Option`, `WithRequestTimeout(time.Duration) Option`, `WithMaxRetries(int) Option`, and `WithRetryInterval(time.Duration) Option` SHALL remain. New options SHALL be exactly `WithEndpoint(string) Option`, `WithRateLimit(float64, int) Option`, and `WithMaxRetryDelay(time.Duration) Option`. `FetchPage` SHALL continue clamping limit to `1..50` and negative offset to zero.
+The public signatures of `NewClient(userAgent string, options ...Option) *Client`, `Fetch(context.Context, string, SubjectType, ...CollectionType) ([]*Subject, error)`, and `FetchPage(context.Context, string, SubjectType, CollectionType, int, int) (*PageResult, error)` SHALL remain. Collection-type constants SHALL remain unchanged. Subject-type constants SHALL match the official OAS exactly: `SubjectTypeBook=1`, `SubjectTypeAnime=2`, `SubjectTypeMusic=3`, `SubjectTypeGame=4`, and `SubjectTypeReal=6`; this intentionally corrects the untagged prototype's reversed Game/Music names while preserving the valid raw numeric set. `WithHTTPClient(*http.Client) Option`, `WithConcurrencyLimit(int) Option`, `WithRequestTimeout(time.Duration) Option`, `WithMaxRetries(int) Option`, and `WithRetryInterval(time.Duration) Option` SHALL remain. New options SHALL be exactly `WithEndpoint(string) Option`, `WithRateLimit(float64, int) Option`, and `WithMaxRetryDelay(time.Duration) Option`. `FetchPage` SHALL continue clamping limit to `1..50` and negative offset to zero.
 
 Invalid values supplied to an existing non-auth option SHALL retain the baseline fallback behavior: nil HTTP client, non-positive concurrency/timeout/retry interval, and negative maximum retries leave the corresponding default unchanged. Invalid new endpoint/rate/max-delay configuration or a nil `Option` SHALL retain the first client configuration fault and every operation SHALL return `ErrInvalidConfiguration` before transport without panic; no later valid Option SHALL clear it. QPS SHALL be finite and positive; NaN and either infinity SHALL be invalid. Burst SHALL be positive.
 
-README/package/example documentation SHALL explicitly list the `v0.1.0` changes: `WithAccessToken` removal; anonymous-only requests; complete DTO fields; canonical aggregate order; empty collection-type rejection; sanitized `HTTPError.Body`; and new endpoint, rate, and maximum-retry-delay options.
+README/package/example documentation SHALL explicitly list the `v0.1.0` changes: corrected Music `3` / Game `4` named constants; `WithAccessToken` removal; anonymous-only requests; complete DTO fields and optional upstream projection behavior; canonical aggregate order; empty collection-type rejection; sanitized `HTTPError.Body`; and new endpoint, rate, and maximum-retry-delay options. Every error example SHALL prove a matching `errors.As` result before dereferencing a typed error.
+
+#### Scenario: Named subject constants match upstream semantics
+- **WHEN** Music and Game requests are constructed through their public named constants
+- **THEN** the exact `subject_type` query values SHALL be `3` and `4` respectively
+- **AND** docs SHALL identify the correction from the untagged prototype
 
 #### Scenario: Baseline anonymous example migrates
-- **WHEN** the baseline example removes no API other than authentication and is formatted for the complete DTO
-- **THEN** it SHALL compile against Go 1.26 with the retained constructor, Fetch signature, enums, and non-auth options
+- **WHEN** the baseline example adopts the corrected subject constants, removes authentication, and is formatted for the complete DTO
+- **THEN** it SHALL compile against Go 1.26 with the retained constructor, Fetch signature, and non-auth options
 
 #### Scenario: Credentialed untagged caller is evaluated
 - **WHEN** a caller relies on `WithAccessToken` or Authorization behavior
@@ -73,12 +98,12 @@ README/package/example documentation SHALL explicitly list the `v0.1.0` changes:
 - **AND** no compatibility shim SHALL silently accept or transmit the token
 
 ### Requirement: Fetch performs complete bounded automatic pagination
-The page size SHALL be 50. For each normalized collection type, `Fetch` SHALL request offset zero at limit 50 exactly once, use that first page’s validated `total` in `0..1_000_000` as the fixed logical page plan, and request offsets `50, 100, ...` strictly below that total. Page-count and offset arithmetic SHALL be checked for overflow before allocation or scheduling. It SHALL NOT make the old `limit=1` probe or refetch offset zero. Later-page total drift within `0..1_000_000` SHALL NOT expand the fixed plan; later metadata SHALL still satisfy protocol validity.
+The page size SHALL be 50. For each normalized collection type, `Fetch` SHALL request offset zero at limit 50 exactly once, require that first page's `len(data) <= total`, use its validated `total` in `0..1_000_000` as the fixed logical page plan, and request offsets `50, 100, ...` strictly below that total. Thus a first page with `total=0` and non-empty data SHALL fail as a protocol error. Page-count and offset arithmetic SHALL be checked for overflow before allocation or scheduling. It SHALL NOT make the old `limit=1` probe or refetch offset zero. Later-page total drift within `0..1_000_000` SHALL NOT expand the fixed plan; later metadata SHALL still satisfy protocol validity.
 
 Page jobs SHALL run through bounded workers and the shared request pipeline. Remaining-page worker count SHALL never exceed `min(remainingPages, configuredConcurrency)`. A terminal page failure SHALL cancel sibling work, wait for started workers to exit, launch no further retry after cancellation, and return no partial result. No operation SHALL leave a goroutine, timer, body, or semaphore permit behind.
 
 #### Scenario: Pagination metadata exceeds a hard boundary
-- **WHEN** a page reports total `1_000_001` or a near-`MaxInt` value, returns more items than the normalized limit, or disagrees with the requested offset/limit
+- **WHEN** a page reports total `1_000_001` or a near-`MaxInt` value, returns more items than the normalized limit, a first page returns more items than its total, or metadata disagrees with the requested offset/limit
 - **THEN** the operation SHALL return `*ProtocolError` matching `ErrProtocol` before unbounded allocation, arithmetic, or scheduling
 - **AND** total `1_000_000` SHALL remain valid with a peak remaining-page worker count no greater than configured concurrency
 
@@ -115,7 +140,7 @@ Page jobs SHALL run through bounded workers and the shared request pipeline. Rem
 ### Requirement: QPS and concurrency are client-wide and context-aware
 Every HTTP attempt, including every retry, SHALL wait on the same per-Client `golang.org/x/time/rate.Limiter` and acquire the same per-Client in-flight semaphore. Distinct Client values SHALL not share limits. Default QPS SHALL be 3 requests/second with burst 1; default maximum in-flight requests SHALL remain 10. `WithRateLimit(qps, burst)` SHALL accept only finite positive QPS and positive burst; `WithConcurrencyLimit(limit)` SHALL accept positive values before the client is used.
 
-An attempt SHALL rate-wait before acquiring concurrency, acquire no permit when its context is already done, and release any acquired permit exactly once. After acquisition, every attempt SHALL create a fresh `WithRequestTimeout` child context covering transport, complete bounded body read, validation, and close, then cancel it. Waiting for QPS, concurrency, retry delay, transport, and body read SHALL all terminate when the parent operation context terminates. Parent cancellation/deadline SHALL take classification precedence over an attempt timeout.
+An attempt SHALL rate-wait before acquiring concurrency, acquire no permit when its context is already done, and release any acquired permit exactly once. If the rate limiter refuses to wait because its reservation would exceed the parent deadline while `ctx.Err()` is not yet set, the call SHALL return the terminal parent-deadline classification directly, make no transport call, and SHALL NOT retry or match `ErrRetryExhausted`. After acquisition, every attempt SHALL create a fresh `WithRequestTimeout` child context covering transport, complete bounded body read, validation, and close, then cancel it. Waiting for QPS, concurrency, retry delay, transport, and body read SHALL all terminate when the parent operation context terminates. Parent cancellation/deadline SHALL take classification precedence over an attempt timeout.
 
 #### Scenario: Custom HTTP client does not disable attempt timeout
 - **WHEN** a custom client with zero, shorter, or longer `Client.Timeout` is supplied before or after `WithRequestTimeout`, and retries occur
@@ -131,6 +156,11 @@ An attempt SHALL rate-wait before acquiring concurrency, acquire no permit when 
 - **THEN** it SHALL return the matching canceled/deadline classification promptly
 - **AND** it SHALL make no transport call and leak no permit
 
+#### Scenario: Reservation would outlive parent deadline
+- **WHEN** the rate limiter rejects a wait because the next token lies after the parent deadline, before the context timer fires
+- **THEN** the call SHALL return the terminal parent-deadline classification without retry exhaustion
+- **AND** it SHALL make no transport call
+
 #### Scenario: Separate clients run independently
 - **WHEN** two Client values use independent test servers and limiters
 - **THEN** one client’s budget SHALL NOT consume or release the other client’s budget
@@ -140,7 +170,7 @@ An attempt SHALL rate-wait before acquiring concurrency, acquire no permit when 
 
 Only live-parent-context transport failures, per-attempt timeouts, HTTP 429, and HTTP 500–599 SHALL retry. Caller cancellation/deadline, input/config, every other HTTP status including 1xx, non-200 2xx, 3xx, 401, 403, 404, and other 4xx, decode, protocol, oversize, and limiter/acquire cancellation SHALL be terminal. Before classification at every failure point, implementation SHALL check the parent context so caller termination cannot be misclassified as a retryable attempt timeout. Before a retry, its prior body SHALL be bounded/read as required and closed.
 
-For retry number `n`, local full-jitter delay SHALL be in `[0, min(base*2^(n-1), maxDelay)]` using overflow-safe arithmetic. A valid non-negative `Retry-After` delta-seconds or HTTP-date on a retryable response SHALL contribute `min(retryAfter, maxDelay)`. The actual wait SHALL be the greater of jitter and bounded Retry-After. Invalid, negative, or past values SHALL be ignored. Every wait SHALL be context-cancellable. Exhaustion SHALL return a typed retry error with total attempts, match `ErrRetryExhausted`, and unwrap the last sanitized error so its classification remains visible.
+For retry number `n`, local full-jitter delay SHALL be in `[0, min(base*2^(n-1), maxDelay)]` using overflow-safe arithmetic. A valid non-negative `Retry-After` delta-seconds or HTTP-date on a retryable response SHALL contribute `min(retryAfter, maxDelay)`; an arbitrarily long all-ASCII-digit delta SHALL saturate to `maxDelay` without native-integer overflow. The actual wait SHALL be the greater of jitter and bounded Retry-After. Invalid, negative, or past values SHALL be ignored. Every wait SHALL be context-cancellable. Exhaustion SHALL return a typed retry error with total attempts, match `ErrRetryExhausted`, and unwrap the last sanitized error so its classification remains visible.
 
 #### Scenario: Retryable matrix succeeds
 - **WHEN** a table-driven server/transport returns a transport failure, attempt timeout, 429, or representative 5xx before a success
@@ -151,7 +181,7 @@ For retry number `n`, local full-jitter delay SHALL be in `[0, min(base*2^(n-1),
 - **THEN** the injected clock/sleeper evidence SHALL show the greater of bounded server delay and local full jitter
 
 #### Scenario: Delay input is unusable
-- **WHEN** Retry-After is malformed, negative, past, or greater than the configured maximum
+- **WHEN** Retry-After is malformed, negative, past, greater than the configured maximum, or an all-digit delta exceeds native integer range
 - **THEN** malformed/negative/past input SHALL be ignored and an excessive valid value SHALL be capped
 - **AND** no arithmetic overflow or unbounded sleep SHALL occur
 

@@ -37,14 +37,14 @@ None. `external-openspec-bootstrap` remains unchanged and is consumed as the gov
 
 - **Status**
   - investigated: yes — the exact ten baseline product files, bootstrap root spec/archive, formal master plan external lane, and backend guide section 6.3 were read.
-  - specified: yes — all five active-change files passed strict validation, independent semantic review, and main-agent approval; exact planning checkpoint commit pending.
-  - implemented: no.
-  - verified: specification validation and semantic review complete; no implementation verification.
-  - committed: bootstrap governance only; no hardening planning or implementation commit.
+  - specified: yes — the approved five-file planning checkpoint is committed.
+  - implemented: yes — the complete unstaged candidate was produced by delegated apply.
+  - verified: yes — independent review plus main-agent format, module, vet, full-test, race, strict OpenSpec, and boundary acceptance passed.
+  - committed: planning checkpoint only; the accepted implementation/archive commit is pending.
   - pushed: no.
   - released: no.
   - deployed: no.
-- **Owner**: delegated External collection client apply subagent; main agent may review and amend only OpenSpec artifacts and performs read-only acceptance.
+- **Owner**: delegated subagents own substantive apply; the main agent owns decisions, OpenSpec review/amendment, acceptance, and low-context archive/stage/commit lifecycle.
 - **Writable/Owned paths**
   - Planning phase only: `openspec/changes/harden-bangumi-collection-go-v0-1-0/.openspec.yaml`, `openspec/changes/harden-bangumi-collection-go-v0-1-0/proposal.md`, `openspec/changes/harden-bangumi-collection-go-v0-1-0/design.md`, `openspec/changes/harden-bangumi-collection-go-v0-1-0/specs/collection-client-v0-1-0/spec.md`, `openspec/changes/harden-bangumi-collection-go-v0-1-0/tasks.md`.
   - Approved apply product/docs/module paths: `README.md`, `client.go`, `collection.go`, `errors.go`, `limiter.go`, `options.go`, `request.go`, `retry.go`, `types.go`, `example/example.go`, `go.mod`, `go.sum`.
@@ -142,6 +142,6 @@ None. `external-openspec-bootstrap` remains unchanged and is consumed as the gov
   - A failed apply remains an unstaged candidate. Rollback is a new reviewed OpenSpec decision; no destructive restoration is authorized.
   - A failed staged acceptance remains uncommitted. A failed local commit proof does not authorize amend/rebase/reset; report the exact mismatch.
 - **Mutable refs**
-  - After spec approval, one delegated planning-checkpoint subagent may advance `refs/heads/codex/v0.1.0-hardening` once from `59eba79b3e3621ce72b756a88b38aee970c00fcf` to the exact accepted five-file planning commit; no other ref may move.
+  - After spec approval, the authorized planning lifecycle may advance `refs/heads/codex/v0.1.0-hardening` once from `59eba79b3e3621ce72b756a88b38aee970c00fcf` to the exact accepted five-file planning commit; no other ref may move.
   - During apply and both implementation/finalization candidate reviews, `HEAD=HARDENING_PLANNING_HEAD` and every ref remain fixed.
-  - Only after unstaged implementation acceptance and staged archive acceptance may a delegated finalization subagent advance the same branch once more with the exact local implementation commit. `refs/heads/main`, `refs/remotes/origin/main`, tags, remote refs, and all remote state remain immutable.
+  - Only after unstaged implementation acceptance and staged archive acceptance may the main agent advance the same branch once more with the exact local implementation commit. `refs/heads/main`, `refs/remotes/origin/main`, tags, remote refs, and all remote state remain immutable.

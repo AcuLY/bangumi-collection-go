@@ -38,7 +38,25 @@ Alternative considered: keep all behavior in `collection.go`. Rejected because r
 - `Comment string`.
 - `UpdatedAt time.Time`.
 
-The wire decoder requires the complete top-level collection tuple, validates enum/range and identity consistency, and copies tag slices. An empty tag set is returned as a non-nil empty slice. Unknown additive upstream fields are ignored; missing or malformed required fields, mismatched top-level/nested subject identity, invalid page metadata, trailing JSON, and a non-JSON success response are protocol/decode errors.
+Before the first public tag, the named subject constants are corrected to the
+official OAS mapping: Book `1`, Anime `2`, Music `3`, Game `4`, Real `6`. The
+untagged prototype had the `Game` and `Music` names reversed. Raw numeric
+values and the valid set do not change, but callers using those two names
+receive the corrected semantic request; the README lists this intentional
+pre-`v0.1.0` break.
+
+The wire decoder follows the current official Bangumi OAS checked on
+2026-07-24. It requires the top-level collection fields `subject_id`,
+`subject_type`, `rate`, `type`, `tags`, `ep_status`, `vol_status`,
+`updated_at`, and `private`. `comment` and the nested `subject` projection are
+optional upstream: an absent comment maps to the public zero-value string, and
+an absent subject keeps `ID == SubjectID` while `Name`/`NameCn` remain empty.
+When the nested subject is present its required identity/name tuple must be
+complete and agree with the top level. Tags are required, copied, and returned
+as a non-nil empty slice when the required array is empty. Unknown additive
+upstream fields are ignored; missing or malformed required fields, a malformed
+present optional field, identity disagreement, invalid page metadata, trailing
+JSON, and a non-JSON success response are protocol/decode errors.
 
 Alternative considered: introduce a new `Collection` return type. Rejected for `v0.1.0` because extending the existing untagged `Subject` preserves current callers without sacrificing required fields.
 
@@ -46,7 +64,7 @@ Alternative considered: introduce a new `Collection` return type. Rejected for `
 
 `WithAccessToken`, the `accessToken` field, and all Authorization behavior are removed. Requests set only the library-owned `User-Agent` and `Accept: application/json`; they never set Cookie or Authorization and never copy arbitrary caller request headers. The client shallow-clones an injected `http.Client`, clears its cookie jar and `Timeout`, and replaces redirect handling with first-response refusal so credentials or identity cannot cross an origin. `WithRequestTimeout` therefore governs every individual attempt regardless of option order or custom-client use; the caller-owned client remains unchanged. A custom `RoundTripper` remains a trusted caller dependency, but request-construction tests prove the library supplies no credential headers.
 
-The default endpoint is `https://api.bgm.tv`. `WithEndpoint` accepts an absolute HTTPS endpoint or loopback HTTP endpoint for `httptest`, requires a non-empty host and an empty or `/` path, rejects opaque URLs, user-info, query, fragment, every other path, and every other insecure endpoint, and stores a parsed immutable root URL. UID normalization trims surrounding Unicode whitespace, then requires valid UTF-8, `1..256` bytes, and no Unicode control rune while preserving case; the normalized UID is escaped as exactly one path segment. The configured User-Agent must be valid UTF-8, `1..256` bytes, non-blank after a validation-only Unicode trim, and free of Unicode control runes; the accepted value is sent byte-for-byte as supplied.
+The default endpoint is `https://api.bgm.tv`. `WithEndpoint` accepts an absolute HTTPS endpoint or loopback HTTP endpoint for `httptest`, requires a non-empty host and an empty or `/` path, rejects opaque URLs, user-info, query, fragment, every other path, and every other insecure endpoint, and stores a parsed immutable root URL. UID normalization trims surrounding Unicode whitespace, then requires valid UTF-8, `1..256` bytes, and no Unicode control rune while preserving case; the normalized UID is escaped as exactly one opaque path segment. Dot-only values `.` and `..` remain valid UIDs but their dots are percent-encoded so a client, proxy, or router cannot normalize them as path traversal. The configured User-Agent must be valid UTF-8, `1..256` bytes, non-blank after a validation-only Unicode trim, and free of Unicode control runes; the accepted value is sent byte-for-byte as supplied.
 
 Alternative considered: retain `WithAccessToken` as a no-op. Rejected because silently accepting a credential option would be misleading and would obscure the first version’s security boundary.
 
@@ -61,13 +79,13 @@ Every initial request and retry follows the same order:
 5. execute one HTTP round trip and complete the bounded body read, validation, and close under that child;
 6. cancel the child and release the semaphore exactly once after those steps or after transport failure.
 
-The rate default is 3 requests/second with burst 1; the existing concurrency default remains 10. New APIs are exactly `WithEndpoint(string) Option`, `WithRateLimit(float64, int) Option`, and `WithMaxRetryDelay(time.Duration) Option`. Existing invalid non-auth option values retain their default-preserving behavior; an invalid User-Agent/new option value, a non-finite/non-positive QPS, non-positive burst, or nil `Option` records the first `ErrInvalidConfiguration`, cannot be cleared by a later valid Option, and fails operations before transport without panic. All concurrent `Fetch`/`FetchPage` calls on the same client share both limiter objects; distinct clients do not. Waiting never holds an in-flight slot, and every wait/acquire is context-cancellable. A parent cancellation/deadline always wins classification over an attempt timeout; a retry creates a new child deadline from the still-live parent.
+The rate default is 3 requests/second with burst 1; the existing concurrency default remains 10. New APIs are exactly `WithEndpoint(string) Option`, `WithRateLimit(float64, int) Option`, and `WithMaxRetryDelay(time.Duration) Option`. Existing invalid non-auth option values retain their default-preserving behavior; an invalid User-Agent/new option value, a non-finite/non-positive QPS, non-positive burst, or nil `Option` records the first `ErrInvalidConfiguration`, cannot be cleared by a later valid Option, and fails operations before transport without panic. All concurrent `Fetch`/`FetchPage` calls on the same client share both limiter objects; distinct clients do not. Waiting never holds an in-flight slot, and every wait/acquire is context-cancellable. If the rate limiter rejects a reservation because it would exceed the parent deadline before `ctx.Err()` becomes non-nil, that result is still the terminal parent-deadline classification and is never retried or wrapped as retry exhaustion. A parent cancellation/deadline always wins classification over an attempt timeout; a retry creates a new child deadline from the still-live parent.
 
 `golang.org/x/time/rate v0.15.0` is admitted as a production dependency because the standard library has no concurrency-safe token-bucket with cancellable reservations. A home-grown ticker/bucket was rejected due to fairness, burst, cancellation, and race risk. Cost: one official `golang.org/x` module (BSD-3-Clause), no transitive runtime dependency, small maintenance/supply-chain surface, and no public type leakage. Removal gate: replace only in a later reviewed change if the standard library gains an equivalent and all limiter/race scenarios remain byte-for-byte behaviorally equivalent.
 
 ### 5. Page with bounded workers, then canonicalize deterministically
 
-`Fetch` validates a non-empty collection-type list, rejects invalid enum values, removes repeats, and sorts the normalized types numerically. For each type it requests offset 0 at limit 50; the returned initial `total` fixes that type’s logical page plan. Every decoded page requires `total` in `0..1_000_000` per collection type, exact normalized requested offset/limit metadata, and `len(data) <= limit`. A violation is a protocol error before allocation or scheduling. Page-count and offset arithmetic is checked for overflow. Remaining offsets `50, 100, ... < total` are handled through bounded `errgroup` workers whose count never exceeds `min(remainingPages, configuredConcurrency)`; no unbounded goroutine is created. A terminal error cancels sibling work and no background worker/timer survives return.
+`Fetch` validates a non-empty collection-type list, rejects invalid enum values, removes repeats, and sorts the normalized types numerically. For each type it requests offset 0 at limit 50; the returned initial `total` fixes that type’s logical page plan. Every decoded page requires `total` in `0..1_000_000` per collection type, exact normalized requested offset/limit metadata, and `len(data) <= limit`; a first page additionally requires `len(data) <= total`, so `total=0` cannot carry records. A violation is a protocol error before allocation or scheduling. Page-count and offset arithmetic is checked for overflow. Remaining offsets `50, 100, ... < total` are handled through bounded `errgroup` workers whose count never exceeds `min(remainingPages, configuredConcurrency)`; no unbounded goroutine is created. A terminal error cancels sibling work and no background worker/timer survives return.
 
 Every collected item carries a deterministic source coordinate `(collectionType, offset, itemIndex)`. After all pages succeed, `Fetch` deduplicates by `(SubjectType, SubjectID, Type)`, selecting the smallest source coordinate on collision, and sorts by `(SubjectType ascending, SubjectID ascending, Type ascending)`. Thus completion timing and repeated requested types cannot change output. `FetchPage` remains a page primitive: it clamps limit to 1–50 and offset to at least zero for compatibility, validates/converts the page, and preserves that page’s upstream item order.
 
@@ -83,7 +101,7 @@ Retryable classes are exactly:
 - HTTP 429;
 - HTTP 500–599.
 
-Caller cancellation/deadline, input/config error, 401/403/404/other 4xx, decode/protocol/oversize errors, and limiter/acquire cancellation are terminal. For attempt number `n`, local delay is full jitter in `[0, min(base*2^(n-1), maxDelay)]`. A syntactically valid non-negative `Retry-After` delta-seconds or HTTP-date on 429/5xx contributes `min(value, maxDelay)`; the actual wait is `max(localJitter, boundedRetryAfter)`. Invalid/past values are ignored. All arithmetic is overflow-safe. Retry exhaustion returns a typed wrapper with total attempts and the last sanitized typed error, preserving classification via `errors.Is/As`.
+Caller cancellation/deadline, input/config error, 401/403/404/other 4xx, decode/protocol/oversize errors, and limiter/acquire cancellation are terminal. For attempt number `n`, local delay is full jitter in `[0, min(base*2^(n-1), maxDelay)]`. A syntactically valid non-negative `Retry-After` delta-seconds or HTTP-date on 429/5xx contributes `min(value, maxDelay)`; an all-digit delta too large for native integer parsing is valid and saturates directly to the configured cap. The actual wait is `max(localJitter, boundedRetryAfter)`. Invalid/past values are ignored. All arithmetic is overflow-safe. Retry exhaustion returns a typed wrapper with total attempts and the last sanitized typed error, preserving classification via `errors.Is/As`.
 
 Alternative considered: always sleep the server value without a cap. Rejected because a context without a deadline could block a library call for an attacker-controlled/unbounded interval.
 
