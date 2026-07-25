@@ -12,7 +12,9 @@ Bangumi 公共用户收藏的匿名、只读 Go 客户端。
 - `FetchPage` 只获取一页，并保留该页的上游顺序。
 - 同一个 `Client` 的所有 `Fetch`、`FetchPage` 和重试共享 QPS 与在途请求上限。
 
-需要 Go 1.26。
+模块的 Go 语言与兼容性下限是 Go 1.26.0；本地开发和 `v0.1.0`
+发布验收必须使用 Go 1.26.5，默认的 `GOTOOLCHAIN=auto` 会按
+`go.mod` 中的 toolchain 声明选择该补丁版本。
 
 公开版本发布后的安装命令将是：
 
