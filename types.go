@@ -1,69 +1,58 @@
 package collection
 
-import "time"
+import (
+	"bytes"
+	"encoding/json"
+	"time"
+)
 
-// SubjectType 条目类型
-//
-//	1 书籍
-//	2 动画
-//	3 游戏
-//	4 音乐
-//	6 三次元
+// SubjectType is a Bangumi subject category.
 type SubjectType int
 
 const (
-	// SubjectTypeBook 书籍
-	SubjectTypeBook SubjectType = 1
-	// SubjectTypeAnime 动画
+	SubjectTypeBook  SubjectType = 1
 	SubjectTypeAnime SubjectType = 2
-	// SubjectTypeGame 游戏
-	SubjectTypeGame SubjectType = 3
-	// SubjectTypeMusic 音乐
-	SubjectTypeMusic SubjectType = 4
-	// SubjectTypeReal 三次元
-	SubjectTypeReal SubjectType = 6
+	SubjectTypeMusic SubjectType = 3
+	SubjectTypeGame  SubjectType = 4
+	SubjectTypeReal  SubjectType = 6
 )
 
-// CollectionType 收藏类型
-//
-//	1 想看
-//	2 看过
-//	3 在看
-//	4 搁置
-//	5 抛弃
+// CollectionType is a user's collection state.
 type CollectionType int
 
 const (
-	// CollectionTypeWish 想看
-	CollectionTypeWish CollectionType = 1
-	// CollectionTypeDone 看过
-	CollectionTypeDone CollectionType = 2
-	// CollectionTypeDoing 在看
-	CollectionTypeDoing CollectionType = 3
-	// CollectionTypeOnHold 搁置
-	CollectionTypeOnHold CollectionType = 4
-	// CollectionTypeDropped 抛弃
+	CollectionTypeWish    CollectionType = 1
+	CollectionTypeDone    CollectionType = 2
+	CollectionTypeDoing   CollectionType = 3
+	CollectionTypeOnHold  CollectionType = 4
 	CollectionTypeDropped CollectionType = 5
 )
 
-// Subject 条目信息
+// Subject is one complete public collection record.
+//
+// ID is retained as a compatibility alias and always equals SubjectID.
 type Subject struct {
-	ID        int      `json:"id"`
-	Name      string   `json:"name"`
-	NameCn    string   `json:"name_cn"`
-	Rate      int      `json:"rate"`
-	VolStatus int      `json:"vol_status"`
-	EpStatus  int      `json:"ep_status"`
-	Tags      []string `json:"tags"`
-	Private   bool     `json:"private"`
+	ID          int            `json:"id"`
+	SubjectID   int            `json:"subject_id"`
+	SubjectType SubjectType    `json:"subject_type"`
+	Type        CollectionType `json:"type"`
+	Name        string         `json:"name"`
+	NameCn      string         `json:"name_cn"`
+	Rate        int            `json:"rate"`
+	Comment     string         `json:"comment"`
+	Tags        []string       `json:"tags"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	VolStatus   int            `json:"vol_status"`
+	EpStatus    int            `json:"ep_status"`
+	Private     bool           `json:"private"`
 }
 
-// PageResult 分页查询结果
+// PageResult is one validated upstream page. Data preserves upstream order.
 type PageResult struct {
-	Data   []*Subject // 当前页的条目列表
-	Total  int        // 符合条件的总数
-	Limit  int        // 每页数量
-	Offset int        // 当前偏移量
+	Data   []*Subject
+	Total  int
+	Limit  int
+	Offset int
 }
 
 type fetchParams struct {
@@ -74,68 +63,160 @@ type fetchParams struct {
 	Limit          int
 }
 
-type result struct {
-	Data   []*collection `json:"data"`
-	Total  int           `json:"total"`
-	Limit  int           `json:"limit"`
-	Offset int           `json:"offset"`
+type wirePage struct {
+	Data   *[]wireCollection `json:"data"`
+	Total  *int64            `json:"total"`
+	Limit  *int64            `json:"limit"`
+	Offset *int64            `json:"offset"`
 }
 
-type collection struct {
-	UpdatedAt time.Time `json:"updated_at"`
-	Comment   string    `json:"comment"`
-	Tags      []string  `json:"tags"`
-	Subject   struct {
-		Date   string `json:"date"`
-		Images struct {
-			Small  string `json:"small"`
-			Grid   string `json:"grid"`
-			Large  string `json:"large"`
-			Medium string `json:"medium"`
-			Common string `json:"common"`
-		} `json:"images"`
-		Name         string `json:"name"`
-		NameCn       string `json:"name_cn"`
-		ShortSummary string `json:"short_summary"`
-		Tags         []struct {
-			Name      string `json:"name"`
-			Count     int    `json:"count"`
-			TotalCont int    `json:"total_cont"`
-		} `json:"tags"`
-		Score           float64 `json:"score"`
-		Type            int     `json:"type"`
-		ID              int     `json:"id"`
-		Eps             int     `json:"eps"`
-		Volumes         int     `json:"volumes"`
-		CollectionTotal int     `json:"collection_total"`
-		Rank            int     `json:"rank"`
-	} `json:"subject"`
-	SubjectID   int  `json:"subject_id"`
-	VolStatus   int  `json:"vol_status"`
-	EpStatus    int  `json:"ep_status"`
-	SubjectType int  `json:"subject_type"`
-	Type        int  `json:"type"`
-	Rate        int  `json:"rate"`
-	Private     bool `json:"private"`
+type wireCollection struct {
+	UpdatedAt   *string         `json:"updated_at"`
+	Comment     json.RawMessage `json:"comment"`
+	Tags        json.RawMessage `json:"tags"`
+	Subject     json.RawMessage `json:"subject"`
+	SubjectID   *int64          `json:"subject_id"`
+	VolStatus   *int64          `json:"vol_status"`
+	EpStatus    *int64          `json:"ep_status"`
+	SubjectType *int64          `json:"subject_type"`
+	Type        *int64          `json:"type"`
+	Rate        *int64          `json:"rate"`
+	Private     *bool           `json:"private"`
 }
 
-func (c *collection) toSubject() *Subject {
+type wireSubject struct {
+	ID     *int64  `json:"id"`
+	Type   *int64  `json:"type"`
+	Name   *string `json:"name"`
+	NameCn *string `json:"name_cn"`
+}
+
+func validSubjectType(value SubjectType) bool {
+	switch value {
+	case SubjectTypeBook, SubjectTypeAnime, SubjectTypeGame, SubjectTypeMusic, SubjectTypeReal:
+		return true
+	default:
+		return false
+	}
+}
+
+func validCollectionType(value CollectionType) bool {
+	return value >= CollectionTypeWish && value <= CollectionTypeDropped
+}
+
+func (item wireCollection) toSubject(expectedSubject SubjectType, expectedCollection CollectionType) (*Subject, error) {
+	if item.UpdatedAt == nil || item.SubjectID == nil ||
+		item.VolStatus == nil || item.EpStatus == nil ||
+		item.SubjectType == nil || item.Type == nil || item.Rate == nil ||
+		item.Private == nil {
+		return nil, newProtocolError()
+	}
+
+	subjectID := *item.SubjectID
+	subjectType := SubjectType(*item.SubjectType)
+	collectionType := CollectionType(*item.Type)
+	if subjectID <= 0 ||
+		!validSubjectType(subjectType) ||
+		subjectType != expectedSubject ||
+		!validCollectionType(collectionType) ||
+		collectionType != expectedCollection ||
+		*item.Rate < 0 || *item.Rate > 10 ||
+		*item.VolStatus < 0 || *item.EpStatus < 0 ||
+		!fitsInt(subjectID) || !fitsInt(*item.VolStatus) || !fitsInt(*item.EpStatus) {
+		return nil, newProtocolError()
+	}
+
+	comment, err := decodeOptionalString(item.Comment)
+	if err != nil {
+		return nil, err
+	}
+	tags, err := decodeRequiredTags(item.Tags)
+	if err != nil {
+		return nil, err
+	}
+	name, nameCn, err := decodeOptionalSubject(item.Subject, subjectID, subjectType)
+	if err != nil {
+		return nil, err
+	}
+
+	updatedAt, err := time.Parse(time.RFC3339, *item.UpdatedAt)
+	if err != nil {
+		return nil, newProtocolError()
+	}
+
 	return &Subject{
-		ID:        c.Subject.ID,
-		Name:      c.Subject.Name,
-		NameCn:    c.Subject.NameCn,
-		Rate:      c.Rate,
-		VolStatus: c.VolStatus,
-		EpStatus:  c.EpStatus,
-		Tags:      c.Tags,
-		Private:   c.Private,
-	}
+		ID:          int(subjectID),
+		SubjectID:   int(subjectID),
+		SubjectType: subjectType,
+		Type:        collectionType,
+		Name:        name,
+		NameCn:      nameCn,
+		Rate:        int(*item.Rate),
+		Comment:     comment,
+		Tags:        tags,
+		UpdatedAt:   updatedAt,
+		VolStatus:   int(*item.VolStatus),
+		EpStatus:    int(*item.EpStatus),
+		Private:     *item.Private,
+	}, nil
 }
 
-func (r *result) toSubjects() []*Subject {
-	subjects := make([]*Subject, 0, len(r.Data))
-	for _, item := range r.Data {
-		subjects = append(subjects, item.toSubject())
+func decodeOptionalString(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
 	}
-	return subjects
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", newProtocolError()
+	}
+	return value, nil
+}
+
+func decodeRequiredTags(raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, newProtocolError()
+	}
+	var encodedTags []json.RawMessage
+	if err := json.Unmarshal(raw, &encodedTags); err != nil || encodedTags == nil {
+		return nil, newProtocolError()
+	}
+	tags := make([]string, len(encodedTags))
+	for index, encoded := range encodedTags {
+		if bytes.Equal(bytes.TrimSpace(encoded), []byte("null")) ||
+			json.Unmarshal(encoded, &tags[index]) != nil {
+			return nil, newProtocolError()
+		}
+	}
+	return tags, nil
+}
+
+func decodeOptionalSubject(
+	raw json.RawMessage,
+	subjectID int64,
+	subjectType SubjectType,
+) (string, string, error) {
+	if len(raw) == 0 {
+		return "", "", nil
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", "", newProtocolError()
+	}
+
+	var subject wireSubject
+	if err := json.Unmarshal(raw, &subject); err != nil ||
+		subject.ID == nil || subject.Type == nil ||
+		subject.Name == nil || subject.NameCn == nil ||
+		*subject.ID != subjectID ||
+		SubjectType(*subject.Type) != subjectType {
+		return "", "", newProtocolError()
+	}
+	return *subject.Name, *subject.NameCn, nil
+}
+
+func fitsInt(value int64) bool {
+	converted := int(value)
+	return int64(converted) == value
 }

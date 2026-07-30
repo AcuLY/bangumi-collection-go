@@ -2,276 +2,302 @@ package collection
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"net/http"
-	"strconv"
-	"strings"
+	"sort"
 	"sync"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	baseURL  = "https://api.bgm.tv/v0/users/%s/collections"
-	pageSize = 50
-)
+const pageSize = 50
 
-// Fetch 并发获取指定类型的全部收藏
+// Fetch retrieves all planned pages for the requested collection states.
 //
-// 参考 https://bangumi.github.io/api/#/%E6%94%B6%E8%97%8F/getUserCollectionsByUsername
-func (c *Client) Fetch(ctx context.Context, userID string, subjType SubjectType, collTypes ...CollectionType) ([]*Subject, error) {
-	if err := validateUserID(userID); err != nil {
-		return nil, err
-	}
-
-	var (
-		subjects []*Subject
-		mu       sync.Mutex
-	)
-
-	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(c.concurrencyLimit)
-
-	for _, ct := range collTypes {
-		g.Go(func() error {
-			p := fetchParams{
-				UserID:         userID,
-				SubjectType:    subjType,
-				CollectionType: ct,
-			}
-
-			result, err := c.fetchAllPages(ctx, p)
-			if err != nil {
-				return err
-			}
-
-			mu.Lock()
-			subjects = append(subjects, result...)
-			mu.Unlock()
-
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-	return subjects, nil
-}
-
-// FetchPage 获取单页收藏数据，支持自定义 limit 和 offset
-//
-// limit 范围为 1-50，超出范围会被自动限制
-//
-// offset 从 0 开始，小于 0 会被设为 0
-func (c *Client) FetchPage(ctx context.Context, userID string, subjType SubjectType, collType CollectionType, limit, offset int) (*PageResult, error) {
-	if err := validateUserID(userID); err != nil {
-		return nil, err
-	}
-
-	p := fetchParams{
-		UserID:         userID,
-		SubjectType:    subjType,
-		CollectionType: collType,
-		Limit:          clamp(limit, 1, pageSize),
-		Offset:         max(offset, 0),
-	}
-
-	r, err := c.doRequest(ctx, p)
+// Repeated states are normalized. Results are deduplicated and sorted by
+// (SubjectType, SubjectID, Type), independent of completion order.
+func (c *Client) Fetch(
+	ctx context.Context,
+	userID string,
+	subjectType SubjectType,
+	collectionTypes ...CollectionType,
+) ([]*Subject, error) {
+	normalizedID, normalizedTypes, err := c.validateFetchInput(ctx, userID, subjectType, collectionTypes)
 	if err != nil {
 		return nil, err
 	}
 
-	return &PageResult{
-		Data:   r.toSubjects(),
-		Total:  r.Total,
-		Limit:  r.Limit,
-		Offset: r.Offset,
-	}, nil
-}
-
-func validateUserID(userID string) error {
-	if strings.TrimSpace(userID) == "" {
-		return ErrEmptyUserID
-	}
-	return nil
-}
-
-func clamp(v, minVal, maxVal int) int {
-	if v < minVal {
-		return minVal
-	}
-	if v > maxVal {
-		return maxVal
-	}
-	return v
-}
-
-func (c *Client) fetchAllPages(ctx context.Context, p fetchParams) ([]*Subject, error) {
-	p.Limit = 1
-	firstPage, err := c.doRequest(ctx, p)
-	if err != nil {
-		return nil, err
-	}
-
-	total := firstPage.Total
-	if total == 0 {
-		return nil, nil
-	}
-
-	var (
-		subjects = make([]*Subject, 0, total)
-		mu       sync.Mutex
-	)
-
-	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(c.concurrencyLimit)
-
-	for offset := 0; offset < total; offset += pageSize {
-		p := fetchParams{
-			UserID:         p.UserID,
-			SubjectType:    p.SubjectType,
-			CollectionType: p.CollectionType,
-			Offset:         offset,
+	firstPages := make([]locatedPage, 0, len(normalizedTypes))
+	jobs := make([]pageJob, 0)
+	for _, collectionType := range normalizedTypes {
+		params := fetchParams{
+			UserID:         normalizedID,
+			SubjectType:    subjectType,
+			CollectionType: collectionType,
 			Limit:          pageSize,
+			Offset:         0,
 		}
-
-		g.Go(func() error {
-			r, err := c.doRequest(ctx, p)
-			if err != nil {
-				return err
-			}
-			mu.Lock()
-			subjects = append(subjects, r.toSubjects()...)
-			mu.Unlock()
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-	return subjects, nil
-}
-
-func (c *Client) doRequest(ctx context.Context, p fetchParams) (*result, error) {
-	var lastErr error
-
-	for attempt := 0; attempt <= c.maxRetries; attempt++ {
-		// 非首次尝试时等待
-		if attempt > 0 {
-			waitTime := c.retryInterval * time.Duration(1<<(attempt-1)) // 指数退避
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(waitTime):
-			}
-		}
-
-		r, err := c.doRequestOnce(ctx, p)
-		if err == nil {
-			return r, nil
-		}
-
-		// 判断是否可重试
-		if !c.isRetryable(err) {
+		page, err := c.doRequest(ctx, params)
+		if err != nil {
 			return nil, err
 		}
-		lastErr = err
-	}
-
-	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
-}
-
-func (c *Client) isRetryable(err error) bool {
-	if err == ErrRateLimited || err == ErrServerError {
-		return true
-	}
-	var netErr *NetworkError
-	if errors.As(err, &netErr) {
-		return true
-	}
-	return false
-}
-
-func (c *Client) doRequestOnce(ctx context.Context, p fetchParams) (*result, error) {
-	req, err := c.buildRequest(ctx, p)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, &NetworkError{Err: err}
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, &NetworkError{Err: err}
-	}
-
-	// 处理 HTTP 状态码
-	if err := c.handleStatusCode(resp.StatusCode, body); err != nil {
-		return nil, err
-	}
-
-	var r result
-	if err := json.Unmarshal(body, &r); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-	return &r, nil
-}
-
-func (c *Client) handleStatusCode(statusCode int, body []byte) error {
-	switch statusCode {
-	case http.StatusOK:
-		return nil
-	case http.StatusNotFound:
-		return ErrInvalidUserID
-	case http.StatusUnauthorized:
-		return ErrUnauthorized
-	case http.StatusForbidden:
-		return ErrForbidden
-	case http.StatusTooManyRequests:
-		return ErrRateLimited
-	default:
-		if statusCode >= 500 {
-			return ErrServerError
+		if len(page.Data) > page.Total {
+			return nil, newProtocolError()
 		}
-		if statusCode >= 400 {
-			return &HTTPError{
-				StatusCode: statusCode,
-				Body:       string(body),
+		firstPages = append(firstPages, locatePage(page, collectionType))
+
+		pageCount := 0
+		if page.Total > 0 {
+			pageCount = (page.Total + pageSize - 1) / pageSize
+		}
+		if pageCount > 0 && pageCount-1 > maxInt()/pageSize {
+			return nil, newProtocolError()
+		}
+		for pageIndex := 1; pageIndex < pageCount; pageIndex++ {
+			offset := pageIndex * pageSize
+			if offset < 0 || offset >= page.Total {
+				return nil, newProtocolError()
 			}
+			jobs = append(jobs, pageJob{
+				params: fetchParams{
+					UserID:         normalizedID,
+					SubjectType:    subjectType,
+					CollectionType: collectionType,
+					Limit:          pageSize,
+					Offset:         offset,
+				},
+			})
 		}
-		return nil
 	}
-}
 
-func (c *Client) buildRequest(ctx context.Context, p fetchParams) (*http.Request, error) {
-	url := fmt.Sprintf(baseURL, p.UserID)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	jobPages, err := c.fetchRemainingPages(ctx, jobs)
 	if err != nil {
 		return nil, err
 	}
 
-	q := req.URL.Query()
-	q.Set("subject_type", strconv.Itoa(int(p.SubjectType)))
-	q.Set("type", strconv.Itoa(int(p.CollectionType)))
-	q.Set("offset", strconv.Itoa(p.Offset))
-	q.Set("limit", strconv.Itoa(p.Limit))
-	req.URL.RawQuery = q.Encode()
+	all := make([]locatedSubject, 0)
+	for _, page := range firstPages {
+		all = append(all, page.items...)
+	}
+	for _, page := range jobPages {
+		all = append(all, page.items...)
+	}
+	return canonicalSubjects(all), nil
+}
 
-	req.Header.Set("User-Agent", c.userAgent)
-	if c.accessToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.accessToken)
+// FetchPage retrieves one validated page. limit is clamped to 1..50 and a
+// negative offset is clamped to zero for compatibility.
+func (c *Client) FetchPage(
+	ctx context.Context,
+	userID string,
+	subjectType SubjectType,
+	collectionType CollectionType,
+	limit int,
+	offset int,
+) (*PageResult, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
+	if c.configErr != nil {
+		return nil, c.configErr
+	}
+	normalizedID, err := normalizeUserID(userID)
+	if err != nil {
+		return nil, err
+	}
+	if !validSubjectType(subjectType) {
+		return nil, ErrInvalidSubjectType
+	}
+	if !validCollectionType(collectionType) {
+		return nil, ErrInvalidCollectionType
 	}
 
-	return req, nil
+	return c.doRequest(ctx, fetchParams{
+		UserID:         normalizedID,
+		SubjectType:    subjectType,
+		CollectionType: collectionType,
+		Limit:          clamp(limit, 1, pageSize),
+		Offset:         max(offset, 0),
+	})
+}
+
+func (c *Client) validateFetchInput(
+	ctx context.Context,
+	userID string,
+	subjectType SubjectType,
+	collectionTypes []CollectionType,
+) (string, []CollectionType, error) {
+	if ctx == nil {
+		return "", nil, ErrNilContext
+	}
+	if c.configErr != nil {
+		return "", nil, c.configErr
+	}
+	normalizedID, err := normalizeUserID(userID)
+	if err != nil {
+		return "", nil, err
+	}
+	if !validSubjectType(subjectType) {
+		return "", nil, ErrInvalidSubjectType
+	}
+	if len(collectionTypes) == 0 {
+		return "", nil, ErrNoCollectionTypes
+	}
+
+	seen := make(map[CollectionType]struct{}, len(collectionTypes))
+	normalizedTypes := make([]CollectionType, 0, len(collectionTypes))
+	for _, collectionType := range collectionTypes {
+		if !validCollectionType(collectionType) {
+			return "", nil, ErrInvalidCollectionType
+		}
+		if _, ok := seen[collectionType]; ok {
+			continue
+		}
+		seen[collectionType] = struct{}{}
+		normalizedTypes = append(normalizedTypes, collectionType)
+	}
+	sort.Slice(normalizedTypes, func(i, j int) bool {
+		return normalizedTypes[i] < normalizedTypes[j]
+	})
+	return normalizedID, normalizedTypes, nil
+}
+
+type pageJob struct {
+	params fetchParams
+}
+
+type sourceCoordinate struct {
+	collectionType CollectionType
+	offset         int
+	itemIndex      int
+}
+
+type locatedSubject struct {
+	subject *Subject
+	source  sourceCoordinate
+}
+
+type locatedPage struct {
+	items []locatedSubject
+}
+
+func locatePage(page *PageResult, collectionType CollectionType) locatedPage {
+	items := make([]locatedSubject, 0, len(page.Data))
+	for itemIndex, subject := range page.Data {
+		items = append(items, locatedSubject{
+			subject: subject,
+			source: sourceCoordinate{
+				collectionType: collectionType,
+				offset:         page.Offset,
+				itemIndex:      itemIndex,
+			},
+		})
+	}
+	return locatedPage{items: items}
+}
+
+func (c *Client) fetchRemainingPages(ctx context.Context, jobs []pageJob) ([]locatedPage, error) {
+	results := make([]locatedPage, len(jobs))
+	if len(jobs) == 0 {
+		return results, nil
+	}
+
+	workerCount := min(len(jobs), c.concurrencyLimit)
+	group, groupCtx := errgroup.WithContext(ctx)
+	var claimMu sync.Mutex
+	nextJob := 0
+
+	for range workerCount {
+		group.Go(func() error {
+			for {
+				if err := groupCtx.Err(); err != nil {
+					return nil
+				}
+
+				claimMu.Lock()
+				if nextJob >= len(jobs) {
+					claimMu.Unlock()
+					return nil
+				}
+				index := nextJob
+				nextJob++
+				claimMu.Unlock()
+
+				page, err := c.doRequest(groupCtx, jobs[index].params)
+				if err != nil {
+					return err
+				}
+				results[index] = locatePage(page, jobs[index].params.CollectionType)
+			}
+		})
+	}
+
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, networkErrorForContext(err)
+	}
+	return results, nil
+}
+
+type subjectKey struct {
+	subjectType SubjectType
+	subjectID   int
+	collection  CollectionType
+}
+
+func canonicalSubjects(items []locatedSubject) []*Subject {
+	winners := make(map[subjectKey]locatedSubject, len(items))
+	for _, item := range items {
+		key := subjectKey{
+			subjectType: item.subject.SubjectType,
+			subjectID:   item.subject.SubjectID,
+			collection:  item.subject.Type,
+		}
+		current, exists := winners[key]
+		if !exists || coordinateLess(item.source, current.source) {
+			winners[key] = item
+		}
+	}
+
+	result := make([]*Subject, 0, len(winners))
+	for _, item := range winners {
+		result = append(result, item.subject)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].SubjectType != result[j].SubjectType {
+			return result[i].SubjectType < result[j].SubjectType
+		}
+		if result[i].SubjectID != result[j].SubjectID {
+			return result[i].SubjectID < result[j].SubjectID
+		}
+		return result[i].Type < result[j].Type
+	})
+	if result == nil {
+		result = make([]*Subject, 0)
+	}
+	return result
+}
+
+func coordinateLess(left, right sourceCoordinate) bool {
+	if left.collectionType != right.collectionType {
+		return left.collectionType < right.collectionType
+	}
+	if left.offset != right.offset {
+		return left.offset < right.offset
+	}
+	return left.itemIndex < right.itemIndex
+}
+
+func clamp(value, minimum, maximum int) int {
+	if value < minimum {
+		return minimum
+	}
+	if value > maximum {
+		return maximum
+	}
+	return value
+}
+
+func maxInt() int {
+	return int(^uint(0) >> 1)
 }

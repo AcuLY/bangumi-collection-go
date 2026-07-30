@@ -1,0 +1,29 @@
+schema: spec-driven
+
+context: |
+  This repository is the external public-collection client lane.
+  Its exact baseline is 8173f44911360150a5a5a7c6418021d1014fe85b and its development branch is codex/v0.1.0-hardening.
+  Preserve the untracked CLAUDE.md, untracked note, and ignored .claude/settings.local.json as user-owned local paths.
+  Work is spec-before-apply: implementation starts only after complete OpenSpec artifacts pass strict validation and main-agent approval.
+  Every change names its delegated subagent owner, exact owned/writable paths, read-only protected inputs, and exact dependency change IDs or None.
+  An accepted local development commit does not authorize fetch, push, PR, tag, release, publication, or deployment; each remains a separate gate.
+
+rules:
+  proposal:
+    - "Include every Section 5.3 boundary field: Status, Owner, Writable/Owned paths, Read-only protected inputs, Consumes, Produces, Dependencies, Deliverables, Acceptance, Non-goals, Operations deferred, and Stop/rollback conditions; declare Mutable refs whenever a ref may move."
+    - "Enumerate mechanically checkable owned and protected paths and exact dependency change IDs; use None instead of wave names or group aliases when there is no dependency."
+    - "Define acceptance with executable commands, exact expected evidence, and a clear stop gate."
+    - "Record investigated, specified, implemented, verified, committed, pushed, released, and deployed as separate status dimensions."
+    - "Keep fetch, push, PR, tag, release, publication, deployment, and other remote mutations as explicit non-goals unless separately authorized."
+  design:
+    - "Include every Section 5.3 boundary field: Status, Owner, Writable/Owned paths, Read-only protected inputs, Consumes, Produces, Dependencies, Deliverables, Acceptance, Non-goals, Operations deferred, and Stop/rollback conditions; declare Mutable refs whenever a ref may move."
+    - "Enumerate mechanically checkable owned and protected paths and exact dependency change IDs; use None instead of wave names or group aliases when there is no dependency."
+    - "Define acceptance with executable commands, exact expected evidence, and a clear stop gate."
+    - "Record investigated, specified, implemented, verified, committed, pushed, released, and deployed as separate status dimensions."
+    - "Keep fetch, push, PR, tag, release, publication, deployment, and other remote mutations as explicit non-goals unless separately authorized."
+  tasks:
+    - "Include every Section 5.3 boundary field: Status, Owner, Writable/Owned paths, Read-only protected inputs, Consumes, Produces, Dependencies, Deliverables, Acceptance, Non-goals, Operations deferred, and Stop/rollback conditions; declare Mutable refs whenever a ref may move."
+    - "Enumerate mechanically checkable owned and protected paths and exact dependency change IDs; use None instead of wave names or group aliases when there is no dependency."
+    - "Define acceptance with executable commands, exact expected evidence, and a clear stop gate."
+    - "Record investigated, specified, implemented, verified, committed, pushed, released, and deployed as separate status dimensions."
+    - "Keep fetch, push, PR, tag, release, publication, deployment, and other remote mutations as explicit non-goals unless separately authorized."
