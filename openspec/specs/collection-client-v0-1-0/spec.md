@@ -19,19 +19,20 @@ Apply SHALL begin only from exact `HARDENING_PLANNING_HEAD`, write only the 21 a
 - **THEN** apply SHALL stop before product mutation and report the exact mismatch
 
 ### Requirement: The public DTO preserves the complete collection record
-`Fetch` and `FetchPage` SHALL return `*Subject` values with public fields `ID`, `SubjectID`, `SubjectType`, `Type`, `Name`, `NameCn`, `Rate`, `Comment`, `Tags`, `UpdatedAt`, `VolStatus`, `EpStatus`, and `Private`. `SubjectID` SHALL contain upstream top-level `subject_id`; compatibility field `ID` SHALL equal `SubjectID`. `SubjectType` SHALL contain upstream `subject_type`; `Type` SHALL contain the collection state. Present comment, required tags, update timestamp, progress, rating, and private marker SHALL be preserved without semantic inference.
+`Fetch` and `FetchPage` SHALL return `*Subject` values with public fields `ID`, `SubjectID`, `SubjectType`, `Type`, `Name`, `NameCn`, `Rate`, `Comment`, `Tags`, `UpdatedAt`, `VolStatus`, `EpStatus`, and `Private`. `SubjectID` SHALL contain upstream top-level `subject_id`; compatibility field `ID` SHALL equal `SubjectID`. `SubjectType` SHALL contain upstream `subject_type`; `Type` SHALL contain the collection state. Present non-null comment, required tags, update timestamp, progress, rating, and private marker SHALL be preserved without semantic inference.
 
 The decoder SHALL follow the current official Bangumi OAS: top-level
 `subject_id`, `subject_type`, `rate`, `type`, `tags`, `ep_status`,
 `vol_status`, `updated_at`, and `private` are required, while `comment` and
-nested `subject` are optional. An absent comment SHALL map to `Comment == ""`.
-An absent nested subject SHALL still set `ID == SubjectID` and leave
-`Name`/`NameCn` empty; when present, its required identity/type/name tuple SHALL
-be complete and consistent with the top level. A missing/null required tags
-array SHALL fail, while an empty required array SHALL become a non-nil empty
-slice and every returned tag slice SHALL be copied.
+nested `subject` are optional. An absent or JSON-null comment SHALL map to
+`Comment == ""`. An absent nested subject SHALL still set `ID == SubjectID`
+and leave `Name`/`NameCn` empty; when present, its required
+identity/type/name tuple SHALL be complete and consistent with the top level.
+A missing/null required tags array SHALL fail, while an empty required array
+SHALL become a non-nil empty slice and every returned tag slice SHALL be
+copied.
 
-The decoder SHALL require a positive subject ID, valid subject type in `{1,2,3,4,6}`, valid collection type in `{1,2,3,4,5}`, rate in `0..10`, non-negative progress, RFC3339 `updated_at`, and exact normalized requested offset/limit metadata. Every page total SHALL be in `0..1_000_000` per collection type and `len(data)` SHALL NOT exceed the normalized requested limit. Any violation SHALL return `*ProtocolError` matching `ErrProtocol` before allocation or scheduling. Unknown additive upstream JSON fields MAY be ignored; missing/malformed required content, malformed present optional content, multiple JSON values, or trailing non-whitespace SHALL fail.
+The decoder SHALL require a positive subject ID, valid subject type in `{1,2,3,4,6}`, valid collection type in `{1,2,3,4,5}`, rate in `0..10`, non-negative progress, RFC3339 `updated_at`, and exact normalized requested offset/limit metadata. Every page total SHALL be in `0..1_000_000` per collection type and `len(data)` SHALL NOT exceed the normalized requested limit. Any violation SHALL return `*ProtocolError` matching `ErrProtocol` before allocation or scheduling. Unknown additive upstream JSON fields MAY be ignored; missing/malformed required content, malformed present non-null optional content, multiple JSON values, or trailing non-whitespace SHALL fail.
 
 #### Scenario: Complete valid collection decodes
 - **WHEN** an `httptest` response contains every required collection field and a consistent optional nested subject
@@ -48,6 +49,11 @@ The decoder SHALL require a positive subject ID, valid subject type in `{1,2,3,4
 - **WHEN** a success payload contains every required top-level field but omits `comment` and nested `subject`
 - **THEN** decoding SHALL succeed with empty `Comment`, `Name`, and `NameCn`
 - **AND** `ID` SHALL still equal the required top-level `SubjectID`
+
+#### Scenario: Optional comment is null
+- **WHEN** an otherwise valid success payload contains `comment: null`
+- **THEN** page and aggregate decoding SHALL succeed with `Comment == ""`
+- **AND** non-null non-string comments SHALL remain typed non-retryable protocol failures
 
 #### Scenario: Empty public collection succeeds
 - **WHEN** the first valid page reports total zero and contains no data

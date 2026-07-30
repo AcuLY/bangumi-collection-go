@@ -1,6 +1,6 @@
 | Boundary | Declaration |
 |---|---|
-| Status | Investigated and specified. Implementation, verification, commit, push, tag/release/publication, consumer upgrade, and deployment are independently tracked below. |
+| Status | Implemented, verified, committed, pushed, merged, released as immutable `v0.1.1`, consumed by BangumiStaffStats, deployed, and accepted by a bounded live query; OpenSpec archival remains. |
 | Owner | Main agent owns spec/audit/Git/release/consumer gates; delegated implementation agent owns only the source/test/doc paths and these task markers. |
 | Writable/Owned paths | Apply: `types.go`, `types_test.go`, optional `README.md`, and checkbox markers here. Lifecycle: this exact change, its archive, and synchronized `openspec/specs/collection-client-v0-1-0/spec.md`. |
 | Read-only protected inputs | Every other tracked path/ref; original-worktree user files; BangumiStaffStats until its separate change; full live payloads; hosts and secrets. |
@@ -45,12 +45,12 @@
 
 ## 4. Library and consumer lifecycle
 
-- [ ] 4.1 Sync/archive the accepted OpenSpec, commit the exact library delta,
+- [x] 4.1 Sync/archive the accepted OpenSpec, commit the exact library delta,
   push `codex/accept-null-comments`, and verify the pushed commit exactly.
-- [ ] 4.2 Merge the accepted library change, create immutable `v0.1.1`, and
+- [x] 4.2 Merge the accepted library change, create immutable `v0.1.1`, and
   verify `go list -m` can resolve its exact checksum; do not move `v0.1.0`.
-- [ ] 4.3 Through a separate BangumiStaffStats OpenSpec, pin `v0.1.1`, pass
+- [x] 4.3 Through a separate BangumiStaffStats OpenSpec, pin `v0.1.1`, pass
   Development Actions, deploy the exact admitted `linux/amd64` bundle, and
   rerun the same bounded `lucay126` personal ranking request.
-- [ ] 4.4 Record investigated/specified/implemented/verified/committed/pushed/
+- [x] 4.4 Record investigated/specified/implemented/verified/committed/pushed/
   released/published/consumer-upgraded/deployed/live-query states separately.
