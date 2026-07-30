@@ -166,7 +166,7 @@ func decodeOptionalString(raw json.RawMessage) (string, error) {
 		return "", nil
 	}
 	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return "", newProtocolError()
+		return "", nil
 	}
 	var value string
 	if err := json.Unmarshal(raw, &value); err != nil {

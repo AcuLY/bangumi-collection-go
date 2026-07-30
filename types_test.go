@@ -1,7 +1,10 @@
 package collection
 
 import (
+	"context"
 	"errors"
+	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -83,6 +86,14 @@ func TestRequiredTagsAndOptionalCommentSubject(t *testing.T) {
 			wantNameCn: "条目-1",
 		},
 		{
+			name: "null comment",
+			mutate: func(item map[string]any) {
+				item["comment"] = nil
+			},
+			wantName:   "subject-1",
+			wantNameCn: "条目-1",
+		},
+		{
 			name: "omitted subject",
 			mutate: func(item map[string]any) {
 				delete(item, "subject")
@@ -120,6 +131,125 @@ func TestRequiredTagsAndOptionalCommentSubject(t *testing.T) {
 	}
 }
 
+func TestNullableCommentPageAndAggregate(t *testing.T) {
+	t.Run("page", func(t *testing.T) {
+		client, _ := newLoopbackServerClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			collectionType, limit, offset := requestPageCoordinates(t, request)
+			item := fixtureCollection(1, SubjectTypeAnime, collectionType)
+			item["comment"] = nil
+			writeJSON(t, writer, fixturePage(1, limit, offset, item))
+		}))
+
+		page, err := client.FetchPage(
+			context.Background(),
+			"uid",
+			SubjectTypeAnime,
+			CollectionTypeDone,
+			50,
+			0,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if page == nil || len(page.Data) != 1 || page.Data[0].Comment != "" {
+			t.Fatalf("page = %#v", page)
+		}
+	})
+
+	t.Run("aggregate", func(t *testing.T) {
+		client, _ := newLoopbackServerClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			collectionType, limit, offset := requestPageCoordinates(t, request)
+			switch offset {
+			case 0:
+				withString := fixtureCollection(1, SubjectTypeAnime, collectionType)
+				omitted := fixtureCollection(2, SubjectTypeAnime, collectionType)
+				delete(omitted, "comment")
+				writeJSON(t, writer, fixturePage(51, limit, offset, withString, omitted))
+			case 50:
+				nullComment := fixtureCollection(3, SubjectTypeAnime, collectionType)
+				nullComment["comment"] = nil
+				writeJSON(t, writer, fixturePage(51, limit, offset, nullComment))
+			default:
+				t.Errorf("unexpected offset %d", offset)
+				writeJSON(t, writer, fixturePage(0, limit, offset))
+			}
+		}))
+
+		subjects, err := client.Fetch(
+			context.Background(),
+			"uid",
+			SubjectTypeAnime,
+			CollectionTypeDone,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(subjects) != 3 ||
+			subjects[0].Comment != "fixture comment" ||
+			subjects[1].Comment != "" ||
+			subjects[2].Comment != "" {
+			t.Fatalf("subjects = %#v", subjects)
+		}
+	})
+}
+
+func TestNonStringOptionalCommentIsProtocolFailure(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{name: "number", value: 1},
+		{name: "object", value: map[string]any{"fixture": "value"}},
+		{name: "array", value: []any{"fixture"}},
+		{name: "boolean", value: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var calls atomic.Int64
+			client, _ := newLoopbackServerClient(
+				t,
+				http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+					calls.Add(1)
+					collectionType, limit, offset := requestPageCoordinates(t, request)
+					valid := fixtureCollection(1, SubjectTypeAnime, collectionType)
+					invalid := fixtureCollection(2, SubjectTypeAnime, collectionType)
+					invalid["comment"] = test.value
+					writeJSON(t, writer, fixturePage(2, limit, offset, valid, invalid))
+				}),
+				WithMaxRetries(3),
+			)
+
+			page, err := client.FetchPage(
+				context.Background(),
+				"uid",
+				SubjectTypeAnime,
+				CollectionTypeDone,
+				50,
+				0,
+			)
+			var protocolErr *ProtocolError
+			if page != nil || !errors.As(err, &protocolErr) || !errors.Is(err, ErrProtocol) {
+				t.Fatalf("page=%#v error=%T %v", page, err, err)
+			}
+
+			subjects, err := client.Fetch(
+				context.Background(),
+				"uid",
+				SubjectTypeAnime,
+				CollectionTypeDone,
+			)
+			protocolErr = nil
+			if subjects != nil || !errors.As(err, &protocolErr) || !errors.Is(err, ErrProtocol) {
+				t.Fatalf("subjects=%#v error=%T %v", subjects, err, err)
+			}
+			if calls.Load() != 2 {
+				t.Fatalf("transport calls = %d", calls.Load())
+			}
+		})
+	}
+}
+
 func TestCollectionProtocolValidation(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -132,8 +262,6 @@ func TestCollectionProtocolValidation(t *testing.T) {
 		{name: "null required tag item", mutate: func(item map[string]any) {
 			item["tags"] = []any{"one", nil}
 		}},
-		{name: "null optional comment", mutate: func(item map[string]any) { item["comment"] = nil }},
-		{name: "malformed optional comment", mutate: func(item map[string]any) { item["comment"] = 1 }},
 		{name: "null optional subject", mutate: func(item map[string]any) { item["subject"] = nil }},
 		{name: "malformed optional subject", mutate: func(item map[string]any) { item["subject"] = "subject" }},
 		{name: "incomplete optional subject", mutate: func(item map[string]any) {

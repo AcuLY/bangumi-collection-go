@@ -142,7 +142,7 @@ page, err := client.FetchPage(
 | `Type` | 收藏状态 |
 | `Name`, `NameCn` | 原名与中文名；上游省略 `subject` 时为空 |
 | `Rate` | 用户评分，`0..10` |
-| `Comment` | 用户评论；上游省略时为空字符串 |
+| `Comment` | 用户评论；上游省略或明确为 `null` 时为空字符串 |
 | `Tags` | 必填的用户收藏标签；空数组有效，返回值始终为非 nil slice |
 | `UpdatedAt` | RFC3339 更新时间 |
 | `VolStatus`, `EpStatus` | 卷数与话数进度 |
@@ -150,7 +150,7 @@ page, err := client.FetchPage(
 
 官方条目类型映射为：书籍 `1`、动画 `2`、音乐 `3`、游戏 `4`、三次元 `6`。未打 tag 的原型曾把 `SubjectTypeGame` 与 `SubjectTypeMusic` 的名称写反；首个 `v0.1.0` 契约在发布前纠正为 `SubjectTypeMusic=3`、`SubjectTypeGame=4`，有效原始数值集合不变。收藏类型值保持不变：想看 `1`、看过 `2`、在看 `3`、搁置 `4`、抛弃 `5`。
 
-官方响应中的 `comment` 与嵌套 `subject` 是可选字段。省略 `subject` 时，`ID` 仍等于顶层 `SubjectID`，`Name`、`NameCn` 为空；若这些可选字段出现，则必须是完整、非 `null` 的合法值。`tags` 是必填字段，省略、`null` 或类型错误都会作为协议错误返回。
+官方响应中的 `comment` 与嵌套 `subject` 是可选字段。省略或明确为 `null` 的 `comment` 会映射为空字符串，其他已出现的值必须是字符串。省略 `subject` 时，`ID` 仍等于顶层 `SubjectID`，`Name`、`NameCn` 为空；若 `subject` 出现，则必须是完整、非 `null` 的合法值。`tags` 是必填字段，省略、`null` 或类型错误都会作为协议错误返回。
 
 ## 错误处理
 
