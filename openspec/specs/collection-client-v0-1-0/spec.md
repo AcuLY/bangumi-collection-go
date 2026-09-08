@@ -27,7 +27,10 @@ The decoder SHALL follow the current official Bangumi OAS: top-level
 nested `subject` are optional. An absent or JSON-null comment SHALL map to
 `Comment == ""`. An absent nested subject SHALL still set `ID == SubjectID`
 and leave `Name`/`NameCn` empty; when present, its required
-identity/type/name tuple SHALL be complete and consistent with the top level.
+identity/type/name tuple SHALL be complete. Its ID SHALL match top-level
+subject_id, and its type SHALL be a supported subject type. A differing valid
+nested type SHALL be accepted without changing the returned SubjectType,
+which SHALL continue to preserve top-level subject_type.
 A missing/null required tags array SHALL fail, while an empty required array
 SHALL become a non-nil empty slice and every returned tag slice SHALL be
 copied.
@@ -58,6 +61,15 @@ The decoder SHALL require a positive subject ID, valid subject type in `{1,2,3,4
 #### Scenario: Empty public collection succeeds
 - **WHEN** the first valid page reports total zero and contains no data
 - **THEN** `Fetch` SHALL return a non-nil empty slice and nil error
+
+#### Scenario: Nested subject metadata has a different supported type
+- **WHEN** an anime collection record has top-level subject_type 2 and a same-ID nested subject with supported type 6
+- **THEN** FetchPage and Fetch SHALL retain the record and its names with SubjectType 2
+- **AND** the aggregate SHALL not drop the record, rewrite its type or fail because of that supported nested type difference
+
+#### Scenario: Nested metadata remains invalid
+- **WHEN** the nested subject has a missing, null, malformed or unsupported type, missing names, or a different ID
+- **THEN** the decoder SHALL still return a non-retryable protocol error without partial aggregate data
 
 ### Requirement: The first public contract is anonymous and input-safe
 The client SHALL retrieve only anonymous public collection data. `WithAccessToken` and all access-token state/behavior SHALL be removed. Library-built requests SHALL never set or forward Authorization, Cookie, or arbitrary caller request headers. They SHALL set only the configured `User-Agent` and `Accept: application/json`. The supplied User-Agent SHALL be valid UTF-8, `1..256` bytes, non-blank after a validation-only Unicode trim, and contain no Unicode control rune; once accepted, it SHALL be sent byte-for-byte as supplied.

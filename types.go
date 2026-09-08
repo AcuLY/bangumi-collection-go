@@ -134,7 +134,7 @@ func (item wireCollection) toSubject(expectedSubject SubjectType, expectedCollec
 	if err != nil {
 		return nil, err
 	}
-	name, nameCn, err := decodeOptionalSubject(item.Subject, subjectID, subjectType)
+	name, nameCn, err := decodeOptionalSubject(item.Subject, subjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +196,6 @@ func decodeRequiredTags(raw json.RawMessage) ([]string, error) {
 func decodeOptionalSubject(
 	raw json.RawMessage,
 	subjectID int64,
-	subjectType SubjectType,
 ) (string, string, error) {
 	if len(raw) == 0 {
 		return "", "", nil
@@ -210,9 +209,11 @@ func decodeOptionalSubject(
 		subject.ID == nil || subject.Type == nil ||
 		subject.Name == nil || subject.NameCn == nil ||
 		*subject.ID != subjectID ||
-		SubjectType(*subject.Type) != subjectType {
+		!validSubjectType(SubjectType(*subject.Type)) {
 		return "", "", newProtocolError()
 	}
+	// Subject metadata may have been reclassified independently of the
+	// collection record. The public SubjectType keeps the top-level value.
 	return *subject.Name, *subject.NameCn, nil
 }
 

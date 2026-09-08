@@ -2,7 +2,7 @@
 
 Bangumi 公共用户收藏的匿名、只读 Go 客户端。
 
-> 发布状态：本仓库正在准备首个 `v0.1.0` 契约；当前变更没有创建 tag、release，也没有发布模块版本。公开版本发布后才应使用固定的 `v0.1.0`。
+> `v0.1.2` 修复收藏记录与嵌套条目元数据的合法类型不同导致整份收藏获取失败的问题，保留收藏记录原有类型及其他字段。
 
 ## 范围
 
@@ -12,14 +12,14 @@ Bangumi 公共用户收藏的匿名、只读 Go 客户端。
 - `FetchPage` 只获取一页，并保留该页的上游顺序。
 - 同一个 `Client` 的所有 `Fetch`、`FetchPage` 和重试共享 QPS 与在途请求上限。
 
-模块的 Go 语言与兼容性下限是 Go 1.26.0；本地开发和 `v0.1.0`
+模块的 Go 语言与兼容性下限是 Go 1.26.0；本地开发和
 发布验收必须使用 Go 1.26.5，默认的 `GOTOOLCHAIN=auto` 会按
 `go.mod` 中的 toolchain 声明选择该补丁版本。
 
-公开版本发布后的安装命令将是：
+安装：
 
 ```bash
-go get github.com/AcuLY/bangumi-collection-go@v0.1.0
+go get github.com/AcuLY/bangumi-collection-go@v0.1.2
 ```
 
 ## 快速开始
@@ -138,7 +138,7 @@ page, err := client.FetchPage(
 |---|---|
 | `ID` | 兼容别名，始终等于 `SubjectID` |
 | `SubjectID` | 条目 ID |
-| `SubjectType` | 条目类型 |
+| `SubjectType` | 收藏记录顶层的 `subject_type`，保持上游原值 |
 | `Type` | 收藏状态 |
 | `Name`, `NameCn` | 原名与中文名；上游省略 `subject` 时为空 |
 | `Rate` | 用户评分，`0..10` |
@@ -151,6 +151,12 @@ page, err := client.FetchPage(
 官方条目类型映射为：书籍 `1`、动画 `2`、音乐 `3`、游戏 `4`、三次元 `6`。未打 tag 的原型曾把 `SubjectTypeGame` 与 `SubjectTypeMusic` 的名称写反；首个 `v0.1.0` 契约在发布前纠正为 `SubjectTypeMusic=3`、`SubjectTypeGame=4`，有效原始数值集合不变。收藏类型值保持不变：想看 `1`、看过 `2`、在看 `3`、搁置 `4`、抛弃 `5`。
 
 官方响应中的 `comment` 与嵌套 `subject` 是可选字段。省略或明确为 `null` 的 `comment` 会映射为空字符串，其他已出现的值必须是字符串。省略 `subject` 时，`ID` 仍等于顶层 `SubjectID`，`Name`、`NameCn` 为空；若 `subject` 出现，则必须是完整、非 `null` 的合法值。`tags` 是必填字段，省略、`null` 或类型错误都会作为协议错误返回。
+
+收藏记录的 `subject_type` 与嵌套条目元数据的 `subject.type` 可能不同。
+只要两者均为合法条目类型、且两处条目 ID 一致，客户端会保留这条收藏，
+返回的 `SubjectType` 仍取顶层 `subject_type`，名称取嵌套条目。
+例如顶层为动画 `2`、嵌套条目为三次元 `6` 时，不会因此中止整份收藏获取。
+不同条目 ID、非法或缺失的类型、以及顶层类型不符合查询条件仍会返回协议错误。
 
 ## 错误处理
 
@@ -190,4 +196,4 @@ case errors.Is(err, collection.ErrTimeout):
 - `HTTPError.Body` 不再保存或输出上游 body。
 - 新增 endpoint、共享 rate limit 与最大 retry delay options。
 
-这些变更定义首个公开版本的安全边界，不表示该版本已发布。
+这些变更定义首个公开版本的安全边界，后续补丁保持公开 API 兼容。

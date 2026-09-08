@@ -3,6 +3,7 @@ package collection
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -53,6 +54,127 @@ func TestCompleteCollectionDTOAndMutationIsolation(t *testing.T) {
 	if second.Data[0].Tags[0] != "one" || second.Data[0].Name != "subject-42" {
 		t.Fatalf("second result shared caller mutation: %#v", second.Data[0])
 	}
+}
+
+func TestSupportedNestedSubjectTypesPreserveCollectionMetadata(t *testing.T) {
+	params := fetchParams{
+		SubjectType:    SubjectTypeAnime,
+		CollectionType: CollectionTypeDone,
+		Limit:          50,
+	}
+	tests := []struct {
+		name        string
+		subjectType SubjectType
+	}{
+		{name: "book", subjectType: SubjectTypeBook},
+		{name: "anime", subjectType: SubjectTypeAnime},
+		{name: "music", subjectType: SubjectTypeMusic},
+		{name: "game", subjectType: SubjectTypeGame},
+		{name: "real", subjectType: SubjectTypeReal},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			item := fixtureCollection(42, SubjectTypeAnime, CollectionTypeDone)
+			item["subject"].(map[string]any)["type"] = int(test.subjectType)
+			page, err := decodePage(fixturePage(1, 50, 0, item), params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Data) != 1 {
+				t.Fatalf("data length = %d", len(page.Data))
+			}
+			subject := page.Data[0]
+			if subject.ID != 42 || subject.SubjectID != 42 ||
+				subject.SubjectType != SubjectTypeAnime ||
+				subject.Type != CollectionTypeDone ||
+				subject.Name != "subject-42" || subject.NameCn != "条目-42" {
+				t.Fatalf("decoded subject = %#v", subject)
+			}
+		})
+	}
+}
+
+func TestReclassifiedSubjectPageAndAggregate(t *testing.T) {
+	t.Run("page", func(t *testing.T) {
+		client, _ := newLoopbackServerClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			collectionType, limit, offset := requestPageCoordinates(t, request)
+			item := fixtureCollection(631949, SubjectTypeAnime, collectionType)
+			item["subject"].(map[string]any)["type"] = int(SubjectTypeReal)
+			writeJSON(t, writer, fixturePage(1, limit, offset, item))
+		}))
+
+		page, err := client.FetchPage(
+			context.Background(),
+			"uid",
+			SubjectTypeAnime,
+			CollectionTypeDone,
+			50,
+			0,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if page == nil || len(page.Data) != 1 {
+			t.Fatalf("page = %#v", page)
+		}
+		subject := page.Data[0]
+		if subject.ID != 631949 || subject.SubjectID != 631949 ||
+			subject.SubjectType != SubjectTypeAnime ||
+			subject.Type != CollectionTypeDone ||
+			subject.Name != "subject-631949" || subject.NameCn != "条目-631949" {
+			t.Fatalf("subject = %#v", subject)
+		}
+	})
+
+	t.Run("aggregate", func(t *testing.T) {
+		var calls atomic.Int64
+		client, _ := newLoopbackServerClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			calls.Add(1)
+			collectionType, limit, offset := requestPageCoordinates(t, request)
+			switch offset {
+			case 0:
+				items := make([]map[string]any, 50)
+				for index := range items {
+					items[index] = fixtureCollection(50-index, SubjectTypeAnime, collectionType)
+				}
+				writeJSON(t, writer, fixturePage(51, limit, offset, items...))
+			case 50:
+				item := fixtureCollection(631949, SubjectTypeAnime, collectionType)
+				item["subject"].(map[string]any)["type"] = int(SubjectTypeReal)
+				writeJSON(t, writer, fixturePage(51, limit, offset, item))
+			default:
+				t.Errorf("unexpected offset %d", offset)
+				writeJSON(t, writer, fixturePage(0, limit, offset))
+			}
+		}))
+
+		subjects, err := client.Fetch(
+			context.Background(),
+			"uid",
+			SubjectTypeAnime,
+			CollectionTypeDone,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(subjects) != 51 || calls.Load() != 2 {
+			t.Fatalf("subjects length = %d, transport calls = %d", len(subjects), calls.Load())
+		}
+		for index, subject := range subjects {
+			wantID := index + 1
+			if index == 50 {
+				wantID = 631949
+			}
+			if subject.ID != wantID || subject.SubjectID != wantID ||
+				subject.SubjectType != SubjectTypeAnime ||
+				subject.Type != CollectionTypeDone ||
+				subject.Name != fmt.Sprintf("subject-%d", wantID) ||
+				subject.NameCn != fmt.Sprintf("条目-%d", wantID) {
+				t.Fatalf("subject at index %d = %#v", index, subject)
+			}
+		}
+	})
 }
 
 func TestRequiredTagsAndOptionalCommentSubject(t *testing.T) {
@@ -274,13 +396,46 @@ func TestCollectionProtocolValidation(t *testing.T) {
 		{name: "id mismatch", mutate: func(item map[string]any) {
 			item["subject"].(map[string]any)["id"] = 99
 		}},
-		{name: "subject type mismatch", mutate: func(item map[string]any) {
-			item["subject"].(map[string]any)["type"] = int(SubjectTypeBook)
+		{name: "missing nested subject type", mutate: func(item map[string]any) {
+			delete(item["subject"].(map[string]any), "type")
+		}},
+		{name: "null nested subject type", mutate: func(item map[string]any) {
+			item["subject"].(map[string]any)["type"] = nil
+		}},
+		{name: "string nested subject type", mutate: func(item map[string]any) {
+			item["subject"].(map[string]any)["type"] = "6"
+		}},
+		{name: "fractional nested subject type", mutate: func(item map[string]any) {
+			item["subject"].(map[string]any)["type"] = 6.5
+		}},
+		{name: "boolean nested subject type", mutate: func(item map[string]any) {
+			item["subject"].(map[string]any)["type"] = true
+		}},
+		{name: "object nested subject type", mutate: func(item map[string]any) {
+			item["subject"].(map[string]any)["type"] = map[string]any{"type": 6}
+		}},
+		{name: "array nested subject type", mutate: func(item map[string]any) {
+			item["subject"].(map[string]any)["type"] = []int{6}
+		}},
+		{name: "negative nested subject type", mutate: func(item map[string]any) {
+			item["subject"].(map[string]any)["type"] = -1
+		}},
+		{name: "zero nested subject type", mutate: func(item map[string]any) {
+			item["subject"].(map[string]any)["type"] = 0
+		}},
+		{name: "unsupported nested subject type", mutate: func(item map[string]any) {
+			item["subject"].(map[string]any)["type"] = 5
+		}},
+		{name: "high nested subject type", mutate: func(item map[string]any) {
+			item["subject"].(map[string]any)["type"] = 7
 		}},
 		{name: "invalid subject type", mutate: func(item map[string]any) { item["subject_type"] = 5 }},
 		{name: "wrong requested subject type", mutate: func(item map[string]any) {
 			item["subject_type"] = int(SubjectTypeBook)
 			item["subject"].(map[string]any)["type"] = int(SubjectTypeBook)
+		}},
+		{name: "wrong requested outer type with matching nested type", mutate: func(item map[string]any) {
+			item["subject_type"] = int(SubjectTypeBook)
 		}},
 		{name: "invalid collection type", mutate: func(item map[string]any) { item["type"] = 6 }},
 		{name: "wrong requested collection type", mutate: func(item map[string]any) {
